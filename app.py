@@ -80,7 +80,12 @@ from change_markers import (
     update_marker_review,
     upsert_change_markers,
 )
-from auth_store import authenticate, can_manage_surveillance, ensure_auth_schema
+from auth_store import (
+    add_first_admin,
+    authenticate,
+    can_manage_surveillance,
+    ensure_auth_schema,
+)
 from demo_imagery import (
     decode_comparison_frame,
     extract_georeferenced_pixel_location,
@@ -276,6 +281,27 @@ def initialize_database():
         ensure_risk_schema(connection)
         ensure_auth_schema(connection)
         ensure_surveillance_schema(connection)
+
+
+def bootstrap_first_admin_from_secrets():
+    """Create the first administrator from private deployment secrets, if set."""
+    try:
+        bootstrap = st.secrets["bootstrap_admin"]
+    except (FileNotFoundError, KeyError):
+        return
+
+    username = str(bootstrap.get("username", "")).strip()
+    password = str(bootstrap.get("password", ""))
+    if not username or not password:
+        return
+    if len(password) < 12:
+        raise ValueError("bootstrap_admin.password must contain at least 12 characters.")
+
+    with get_connection() as connection:
+        if connection.execute("SELECT 1 FROM users LIMIT 1").fetchone() is None:
+            add_first_admin(connection, username, password)
+
+
 def load_cases():
     with get_connection() as connection:
         return connection.execute(
@@ -4663,7 +4689,11 @@ def _render_login():
     with get_connection() as connection:
         account_count = connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]
     if account_count == 0:
-        st.info("No accounts exist yet. An administrator must run the one-time first-admin setup from PowerShell.")
+        st.info(
+            "No accounts exist yet. For a local setup, an administrator can run "
+            "the one-time first-admin script. For a hosted setup, configure the "
+            "private [bootstrap_admin] secrets before opening the app."
+        )
         st.code(".\\.venv\\Scripts\\python.exe create_first_admin.py", language="powershell")
     with st.form("smartpanchayat_login"):
         username = st.text_input("Username", max_chars=120)
@@ -4682,6 +4712,7 @@ def _render_login():
 
 
 initialize_database()
+bootstrap_first_admin_from_secrets()
 refresh_all_risk_assessments()
 
 apply_theme(st)
